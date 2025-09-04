@@ -140,21 +140,27 @@ async function handleWebhook(request, env) {
 
   if (!email) return text(400, "Missing email");
 
+  // Determine tier based on Lemon Squeezy variant ID
   const variantId = String(attrs.variant_id || "");
   let tier = "free";
-  if (variantId === env.STUDENT_VARIANT_ID) tier = "student";
-  else if (variantId === env.STANDARD_VARIANT_ID) tier = "standard";
-  else if (variantId === env.PRO_VARIANT_ID) tier = "pro";
+  if (variantId === String(env.STUDENT_VARIANT_ID)) tier = "student";
+  if (variantId === String(env.STANDARD_VARIANT_ID)) tier = "standard";
+  if (variantId === String(env.PRO_VARIANT_ID)) tier = "pro";
 
-  const sbKey = env.SUPABASE_SERVICE_ROLE_KEY;
-  let row;
-  if (env.SUPABASE_URL && sbKey) {
-    const upsertUrl = `${env.SUPABASE_URL}/rest/v1/billing_users?on_conflict=lemon_subscription_id`;
-    const upsertRes = await fetch(upsertUrl, {
-      method: "POST",
-      headers: {
-        apikey: sbKey,
-        Authorization: `Bearer ${sbKey}`,
+  const lemon_customer_id = attrs.customer_id || null;
+  const lemon_subscription_id = body?.data?.id || null;
+  const status = attrs.status || null;
+
+  const sbKey = env.SUPABASE_SERVICE_KEY || env.SUPABASE_KEY;
+  if (!env.SUPABASE_URL || !sbKey) {
+    return text(500, "Missing Supabase config");
+  }
+
+  // Upsert into billing_users and return the stored row
+  const [row] = await fetchJSON(
+    `${env.SUPABASE_URL}/rest/v1/billing_users?on_conflict=email`,
+    {
+
         "Content-Type": "application/json",
         Prefer: "resolution=merge-duplicates,return=representation",
       },
@@ -229,6 +235,34 @@ async function handleWebhook(request, env) {
   }
 
   const group = PLAN_GROUP_MAP[tier] || PLAN_GROUP_MAP.free;
+=======
+        "content-type": "application/json",
+        Prefer: "resolution=merge-duplicates,return=representation",
+      },
+      body: JSON.stringify([
+        { email, tier, lemon_customer_id, lemon_subscription_id, status },
+      ]),
+    },
+  );
+
+  // Optionally create a Supabase Auth user (ignore errors)
+  try {
+    await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users`, {
+      method: "POST",
+      headers: {
+        apikey: sbKey,
+        Authorization: `Bearer ${sbKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ email, email_confirm: true }),
+    });
+  } catch (err) {
+    console.warn("auth create err", err?.message);
+  }
+
+  // Use tier from row to determine OWUI group
+  const group = PLAN_GROUP_MAP[row?.tier] || PLAN_GROUP_MAP.free;
+
   const payload = [{ email, name, role: "user", group }];
 
   const res = await fetch(env.OWUI_SYNC_ENDPOINT, {
