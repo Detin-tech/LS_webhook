@@ -152,36 +152,58 @@ async function handleWebhook(request, env) {
 	const lemon_subscription_id = body?.data?.id || null;
 	const status = attrs.status || null;
 
-	const sbKey = env.SUPABASE_SERVICE_KEY || env.SUPABASE_KEY;
-	if (!env.SUPABASE_URL || !sbKey) {
-		return text(500, 'Missing Supabase config');
-	}
-	// Upsert into billing_users and return the stored row
-	const [row] = await fetchJSON(`${env.SUPABASE_URL}/rest/v1/billing_users?on_conflict=email`, {
-		method: 'POST',
-		headers: {
-			apikey: sbKey,
-			Authorization: `Bearer ${sbKey}`,
-			'content-type': 'application/json',
-			Prefer: 'resolution=merge-duplicates,return=representation',
-		},
-		body: JSON.stringify([{ email, tier, lemon_customer_id, lemon_subscription_id, status }]),
-	});
+        const sbKey = env.SUPABASE_SERVICE_KEY;
+        if (!env.SUPABASE_URL || !sbKey) {
+                return text(500, 'Missing Supabase config');
+        }
+        // Upsert into billing_users and return the stored row
+        const [row] = await fetchJSON(`${env.SUPABASE_URL}/rest/v1/billing_users?on_conflict=email`, {
+                method: 'POST',
+                headers: {
+                        apikey: sbKey,
+                        Authorization: `Bearer ${sbKey}`,
+                        'content-type': 'application/json',
+                        Prefer: 'resolution=merge-duplicates,return=representation',
+                },
+                body: JSON.stringify([{ email, tier, lemon_customer_id, lemon_subscription_id, status }]),
+        });
 
-	// Optionally create a Supabase Auth user (ignore errors)
-	try {
-		await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users`, {
-			method: 'POST',
-			headers: {
-				apikey: sbKey,
-				Authorization: `Bearer ${sbKey}`,
-				'content-type': 'application/json',
-			},
-			body: JSON.stringify({ email, email_confirm: true }),
-		});
-	} catch (err) {
-		console.warn('auth create err', err?.message);
-	}
+        // Optionally create a Supabase Auth user (ignore errors)
+        try {
+                await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users`, {
+                        method: 'POST',
+                        headers: {
+                                apikey: sbKey,
+                                Authorization: `Bearer ${sbKey}`,
+                                'content-type': 'application/json',
+                        },
+                        body: JSON.stringify({ email, email_confirm: true }),
+                });
+        } catch (err) {
+                console.warn('auth create err', err?.message);
+        }
+
+        // Send invite email so the user can set a password (ignore failures)
+        try {
+                const inviteRes = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/invite`, {
+                        method: 'POST',
+                        headers: {
+                                apikey: sbKey,
+                                Authorization: `Bearer ${sbKey}`,
+                                'content-type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                                email,
+                                redirect_to: 'https://chat.prosperspot.com', // optional redirect after they click
+                        }),
+                });
+                if (!inviteRes.ok) {
+                        const errText = await inviteRes.text();
+                        console.warn('Failed to send invite email', inviteRes.status, errText);
+                }
+        } catch (err) {
+                console.warn('Invite request failed', err.message);
+        }
 
 	// Use tier from row to determine OWUI group
 	const group = PLAN_GROUP_MAP[row?.tier] || PLAN_GROUP_MAP.free;
